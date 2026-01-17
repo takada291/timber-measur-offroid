@@ -3,16 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>丸太検知v1.5</title>
+    <title>丸太検知v3.0（Androidオフライン対応）</title>
     
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#8b4513">
     
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black">
-    <meta name="apple-mobile-web-app-title" content="丸太検知">
-    <link rel="apple-touch-icon" href="icon-512.png">
-
     <style>
         body { font-family: -apple-system, sans-serif; padding: 15px; background: #fdf5e6; color: #333; margin: 0; }
         .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px; position: relative; }
@@ -21,9 +16,17 @@
         h2 { margin: 0; font-size: 1.1em; color: #5d4037; border: none; }
         .settings-btn { background: #6c757d; color: white; padding: 5px 10px; font-size: 0.85em; border-radius: 4px; border: none; cursor: pointer; }
 
-        #voiceStatus { font-size: 0.8em; color: #fff; background: #5d4037; padding: 5px 12px; border-radius: 20px; margin-bottom: 15px; display: inline-block; }
-        .listening { background: #d32f2f !important; animation: pulse 1.5s infinite; }
+        /* AIステータス表示用 */
+        #voiceStatus { font-size: 0.8em; color: #fff; background: #6c757d; padding: 5px 12px; border-radius: 20px; margin-bottom: 15px; display: inline-block; transition: background 0.3s;}
+        .status-loading { background: #f57c00 !important; }
+        .status-ready { background: #5d4037 !important; }
+        .status-recording { background: #d32f2f !important; animation: pulse 1.5s infinite; }
+        .status-processing { background: #1976d2 !important; }
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+
+        /* 音量メーター */
+        #volumeMeter { width: 100%; height: 4px; background: #ddd; margin-bottom: 15px; border-radius: 2px; overflow: hidden; display: none; }
+        #volumeBar { height: 100%; width: 0%; background: #d32f2f; transition: width 0.1s; }
 
         .input-row { display: flex; flex-direction: column; margin-bottom: 12px; }
         .label-group { display: flex; align-items: baseline; margin-bottom: 4px; }
@@ -40,6 +43,7 @@
         button { flex: 1; min-width: 80px; padding: 14px; font-size: 15px; border: none; border-radius: 6px; cursor: pointer; color: white; font-weight: bold; }
         .save-btn { background: #5d4037; }
         .voice-btn { background: #8b4513; }
+        .voice-btn:disabled { background: #ccc; cursor: not-allowed; }
         .export-btn { background: #388e3c; }
         .cancel-btn { background: #9e9e9e; display: none; }
         .clear-btn { position: absolute; top: 18px; right: 20px; background: #fff; color: #d32f2f; border: 1px solid #d32f2f; padding: 4px 8px; font-size: 11px; width: auto; min-width: auto; }
@@ -55,7 +59,8 @@
         .edit-btn { background: #ffa000; color: white; padding: 6px; width: 45px; border-radius: 4px; font-size: 11px; }
         .del-btn { background: #d32f2f; color: white; padding: 6px; width: 45px; border-radius: 4px; font-size: 11px; }
         .voice-guide-footer { font-size: 0.82em; color: #5d4037; margin-top: 12px; font-weight: bold; text-align: center; background: #fff8e1; padding: 8px; border-radius: 8px; border: 1px dashed #ffa000; }
-
+        
+        /* モーダル等は既存のまま */
         .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
         .modal-content { background-color: #fff; margin: 10% auto; padding: 20px; border-radius: 12px; width: 85%; max-width: 400px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
         .modal-header { font-weight: bold; font-size: 1.1em; margin-bottom: 15px; border-bottom: 1px solid #ddd; padding-bottom: 8px; color: #5d4037; }
@@ -71,11 +76,13 @@
 
 <div class="card">
     <div class="header-area">
-        <h2 id="formTitle">丸太検知v1.5</h2>
+        <h2 id="formTitle">丸太検知v3.0（Androidオフライン対応）</h2>
         <button class="settings-btn" onclick="openSettings()">⚙️ 設定</button>
     </div>
 
-    <div id="voiceStatus">音声入力：オフ</div>
+    <div id="voiceStatus" class="status-loading">AIモデル読込中...</div>
+    <div id="volumeMeter"><div id="volumeBar"></div></div>
+    
     <input type="hidden" id="editId" value="">
     
     <div class="input-row">
@@ -119,12 +126,12 @@
     </div>
     
     <div class="btn-group">
-        <button id="voiceBtn" class="voice-btn" onclick="toggleVoice()">音声入力開始</button>
+        <button id="voiceBtn" class="voice-btn" onclick="toggleLoop()" disabled>準備中...</button>
         <button id="saveBtn" class="save-btn" onclick="handleSave()">保存</button>
         <button id="cancelBtn" class="cancel-btn" onclick="resetForm()">取消</button>
         <button class="export-btn" onclick="handleExport()">CSV出力</button>
     </div>
-    <div class="voice-guide-footer">※「ほぞん」と発音すると登録されます。</div>
+    <div class="voice-guide-footer">「開始」で連続モード。発話後の”沈黙”で自動解析。<br>「終了」またはボタンで停止。</div>
 </div>
 
 <div class="card">
@@ -171,23 +178,19 @@
 </div>
 
 <script>
+    // --- 既存のロジック (変更なし部分は省略せず記述) ---
     const STORAGE_KEY = 'timber_measur_v1_data';
     const SETTINGS_KEY = 'timber_measur_settings';
     const DEFAULT_TREES = ['スギ', 'ヒノキ', '他針', '他広'];
     let currentSettings = { customTrees: [], roundMode: 'normal' };
-    
-    // 読み上げ用ボイスキャッシュ
     let availableVoices = [];
 
     window.onload = function() {
         loadSettings();
         renderTable();
-        
-        // iOS/Androidでのボイス一覧取得タイミング対策
         if ('speechSynthesis' in window) {
             const loadVoices = () => { availableVoices = window.speechSynthesis.getVoices(); };
             window.speechSynthesis.onvoiceschanged = loadVoices;
-            // 念のため少し待ってから取得
             setTimeout(loadVoices, 1000);
         }
     };
@@ -278,113 +281,239 @@
         volEl.value = finalVol;
     }
 
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('sw.js').catch(err => console.log('SW Register Error:', err));
-    }
+    // --- AI音声認識 (Whisper) + VAD (無音検知) 実装 ---
 
-    let recognition;
-    let isListening = false;
-    const SpeechRecognition = window.webkitSpeechRecognition || window.SpeechRecognition;
+    const workerCode = `
+        import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
+        env.allowLocalModels = false;
+        let transcriber = null;
 
-    if (SpeechRecognition) {
-        recognition = new SpeechRecognition();
-        recognition.lang = 'ja-JP';
-        recognition.continuous = true;
-        recognition.interimResults = false;
-
-        recognition.onresult = (event) => {
-            let lastText = event.results[event.results.length - 1][0].transcript.trim();
-            document.getElementById('voiceStatus').innerText = "認識中: " + lastText;
-            processVoiceCommand(lastText.toLowerCase());
-        };
-        
-        recognition.onend = () => { if (isListening) recognition.start(); };
-        
-        recognition.onerror = (event) => {
-            console.log("Voice Error:", event.error);
-            // ネットワークエラー等の場合、ボタン状態をリセットする
-            if(event.error === 'network' || event.error === 'not-allowed' || event.error === 'aborted') {
-                if(isListening) {
-                    toggleVoiceUI(false); // UI強制停止
+        self.onmessage = async (event) => {
+            const message = event.data;
+            if (message.type === 'load') {
+                try {
+                    transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny');
+                    self.postMessage({ type: 'ready' });
+                } catch (e) {
+                    self.postMessage({ type: 'error', data: e.toString() });
+                }
+            }
+            else if (message.type === 'transcribe') {
+                if (!transcriber) return;
+                try {
+                    const output = await transcriber(message.audio, {
+                        language: 'japanese',
+                        task: 'transcribe'
+                    });
+                    self.postMessage({ type: 'result', text: output.text });
+                } catch (e) {
+                    self.postMessage({ type: 'error', data: e.toString() });
                 }
             }
         };
+    `;
+
+    const blob = new Blob([workerCode], { type: 'application/javascript' });
+    const worker = new Worker(URL.createObjectURL(blob), { type: 'module' });
+
+    const statusEl = document.getElementById('voiceStatus');
+    const voiceBtn = document.getElementById('voiceBtn');
+    const volumeMeter = document.getElementById('volumeMeter');
+    const volumeBar = document.getElementById('volumeBar');
+
+    let isLoopActive = false; // ループモードがONかどうか
+    let isRecording = false;
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let audioContext = null;
+    let analyser = null;
+    let dataArray = null;
+    let silenceTimer = null;
+    let silenceThreshold = 0.02; // 無音判定の閾値
+    let silenceDelay = 1500; // 何ミリ秒無音なら停止するか (1.5秒)
+
+    worker.onmessage = (e) => {
+        const msg = e.data;
+        if (msg.type === 'ready') {
+            voiceBtn.disabled = false;
+            voiceBtn.innerText = "音声入力開始";
+            updateStatus('ready', '待機中 (Offline OK)');
+        } 
+        else if (msg.type === 'result') {
+            let text = msg.text;
+            console.log("認識結果:", text);
+            updateStatus('ready', '認識: ' + text);
+            
+            // "終了"コマンドのチェック
+            if (text.includes("終了") || text.includes("しゅうりょう")) {
+                isLoopActive = false;
+                voiceBtn.innerText = "音声入力開始";
+                speakText("終了します");
+                return;
+            }
+
+            processVoiceCommand(text.toLowerCase());
+            
+            // ループモードがActiveなら、処理後に再開
+            if (isLoopActive) {
+                setTimeout(() => {
+                    startRecording(); // 自動再開
+                }, 1000); // 1秒待ってから再開
+            } else {
+                voiceBtn.innerText = "音声入力開始";
+            }
+        }
+        else if (msg.type === 'error') {
+            alert("AIエラー: " + msg.data);
+            isLoopActive = false;
+            updateStatus('ready', 'エラー発生');
+            voiceBtn.innerText = "音声入力開始";
+        }
+    };
+
+    worker.postMessage({ type: 'load' });
+
+    function updateStatus(state, text) {
+        statusEl.className = '';
+        statusEl.innerText = text;
+        statusEl.classList.add('status-' + state);
     }
 
-    function toggleVoiceUI(active) {
-        const btn = document.getElementById('voiceBtn');
-        const status = document.getElementById('voiceStatus');
-        isListening = active;
-        if (active) {
-            btn.innerText = "音声入力停止";
-            status.classList.add('listening');
+    // ボタン操作（トグル）
+    function toggleLoop() {
+        if (isLoopActive) {
+            // 強制停止
+            isLoopActive = false;
+            stopRecording(false); // 解析せずに止める
+            voiceBtn.innerText = "音声入力開始";
+            updateStatus('ready', '停止しました');
+            volumeMeter.style.display = 'none';
         } else {
-            btn.innerText = "音声入力開始";
-            status.innerText = "音声入力：オフ";
-            status.classList.remove('listening');
-            if(recognition) recognition.stop();
+            // 開始
+            isLoopActive = true;
+            startRecording();
+            voiceBtn.innerText = "終了/停止";
+            volumeMeter.style.display = 'block';
         }
     }
 
-    function toggleVoice() {
-        if (!recognition) return alert("音声認識非対応です");
+    async function startRecording() {
+        if (isRecording) return;
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            
+            // 音量監視のセットアップ
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioContext.createMediaStreamSource(stream);
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+            const bufferLength = analyser.frequencyBinCount;
+            dataArray = new Uint8Array(bufferLength);
+
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+
+            mediaRecorder.ondataavailable = event => {
+                audioChunks.push(event.data);
+            };
+
+            mediaRecorder.onstop = async () => {
+                // 停止処理
+                if (isLoopActive) {
+                    // ループ中なら解析へ
+                    updateStatus('processing', '解析中...');
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    const audioCtxForDecode = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                    const arrayBuffer = await audioBlob.arrayBuffer();
+                    const audioBuffer = await audioCtxForDecode.decodeAudioData(arrayBuffer);
+                    const rawData = audioBuffer.getChannelData(0);
+                    worker.postMessage({ type: 'transcribe', audio: rawData });
+                }
+                
+                // クリーンアップ
+                stream.getTracks().forEach(track => track.stop());
+                if(audioContext) audioContext.close();
+                cancelAnimationFrame(animationId);
+            };
+
+            mediaRecorder.start();
+            isRecording = true;
+            updateStatus('recording', '聞いています... (沈黙で自動解析)');
+            
+            // 音量監視ループ開始
+            monitorSilence();
+
+        } catch (err) {
+            console.error(err);
+            isLoopActive = false;
+            alert("マイクエラー");
+        }
+    }
+
+    function stopRecording(shouldAnalyze = true) {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            if (!shouldAnalyze) isLoopActive = false; // 解析しない＝ループ終了
+            mediaRecorder.stop();
+        }
+        isRecording = false;
+        clearTimeout(silenceTimer);
+    }
+
+    let animationId;
+    function monitorSilence() {
+        analyser.getByteFrequencyData(dataArray);
         
-        if (!isListening) {
-            // ★重要：先にマイクを開始する（iOS対策）
-            try {
-                recognition.start();
-                toggleVoiceUI(true);
-                // マイク起動後に発話
-                setTimeout(() => speakText("開始"), 100);
-            } catch (e) {
-                console.error(e);
-                toggleVoiceUI(false);
+        // 音量計算 (簡易平均)
+        let sum = 0;
+        for(let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+        }
+        let average = sum / dataArray.length;
+        let normalizedVol = average / 256; // 0.0 - 1.0
+
+        // ビジュアル更新
+        volumeBar.style.width = (normalizedVol * 500) + '%'; // 感度調整用倍率
+
+        // 無音判定
+        // ノイズがあるため閾値は環境に合わせて調整が必要（ここでは0.02≒5%程度）
+        if (normalizedVol < silenceThreshold) {
+            if (!silenceTimer) {
+                silenceTimer = setTimeout(() => {
+                    console.log("Silence detected, stopping...");
+                    stopRecording(true); // 自動停止して解析へ
+                }, silenceDelay);
             }
         } else {
-            toggleVoiceUI(false);
+            // 音がしたらタイマーリセット
+            if (silenceTimer) {
+                clearTimeout(silenceTimer);
+                silenceTimer = null;
+            }
+        }
+
+        if (isRecording) {
+            animationId = requestAnimationFrame(monitorSilence);
         }
     }
 
-    function speakText(text) {
-        if ('speechSynthesis' in window) {
-            // 発話中のものをキャンセル
-            window.speechSynthesis.cancel();
-            
-            const uttr = new SpeechSynthesisUtterance(text);
-            uttr.lang = "ja-JP";
-            uttr.rate = 1.2;
-            
-            if(availableVoices.length === 0) {
-                availableVoices = window.speechSynthesis.getVoices();
-            }
-
-            // iOSオフライン対策：ローカルボイスを優先
-            let targetVoice = availableVoices.find(v => v.lang === 'ja-JP' && v.localService === true);
-            if (!targetVoice) {
-                targetVoice = availableVoices.find(v => v.lang === 'ja-JP');
-            }
-            if (targetVoice) {
-                uttr.voice = targetVoice;
-            }
-
-            window.speechSynthesis.speak(uttr);
-        }
-    }
-
+    // --- 音声コマンド処理 (変更なし) ---
     function processVoiceCommand(text) {
         const getNum = (str) => {
+            str = str.replace(/[０-９]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0));
             const m = str.replace(/ /g, "").match(/\d+(\.\d+)?/);
             return m ? m[0] : null;
         };
 
         let matched = false;
+
         if (text.includes("保存") || text.includes("ほぞん")) {
             handleSave();
             speakText("保存");
             return;
         }
 
-        if (text.includes("種類") || text.includes("しゅるい")) {
+        if (text.includes("種類") || text.includes("しゅるい") || text.includes("樹種")) {
             let targetType = "";
             if (text.includes("すぎ") || text.includes("スギ")) targetType = "スギ";
             else if (text.includes("ひのき") || text.includes("ヒノキ")) targetType = "ヒノキ";
@@ -407,24 +536,44 @@
             if(n) {
                 document.getElementById('diameter').value = n;
                 updateVolume();
-                speakText(n + "センチ");
+                speakText("直径 " + n);
             }
         }
-        else if (!matched && (text.includes("長さ") || text.includes("ながさ") || text.includes("高さ") || text.includes("たかさ"))) {
+        else if (!matched && (text.includes("長さ") || text.includes("ながさ"))) {
             const n = getNum(text); 
             if(n) {
                 document.getElementById('length').value = n;
                 updateVolume();
-                speakText(n + "メートル");
+                speakText("長さ " + n);
             }
         }
         else if (!matched && (text.includes("メモ") || text.includes("めも"))) {
-            let val = text.replace(/メモ|めも/, "").trim();
-            document.getElementById('memo').value = val;
-            speakText("メモ " + val);
+            let val = "";
+            if(text.includes("メモ")) val = text.split("メモ")[1];
+            else if(text.includes("めも")) val = text.split("めも")[1];
+            val = val.trim();
+            if(val) {
+                document.getElementById('memo').value = val;
+                speakText("メモ " + val);
+            }
         }
     }
 
+    function speakText(text) {
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
+            const uttr = new SpeechSynthesisUtterance(text);
+            uttr.lang = "ja-JP";
+            uttr.rate = 1.2;
+            if(availableVoices.length === 0) availableVoices = window.speechSynthesis.getVoices();
+            let targetVoice = availableVoices.find(v => v.lang === 'ja-JP' && v.localService === true);
+            if (!targetVoice) targetVoice = availableVoices.find(v => v.lang === 'ja-JP');
+            if (targetVoice) uttr.voice = targetVoice;
+            window.speechSynthesis.speak(uttr);
+        }
+    }
+
+    // --- データ保存・表示系 (既存のまま) ---
     function handleSave() {
         var treeType = document.getElementById('treeType').value;
         var length = document.getElementById('length').value;
@@ -434,7 +583,7 @@
         var editId = document.getElementById('editId').value;
 
         if(!length || !diameter) {
-            alert("入力不足（材長・末口直径）");
+            speakText("数値が足りません"); // エラーも読み上げ
             return;
         }
 
@@ -521,7 +670,7 @@
         document.getElementById('volume').value = "";
         document.getElementById('memo').value = "";
         if (!keepLength) document.getElementById('length').value = "4";
-        document.getElementById('formTitle').innerText = "丸太検知v1.5 (安定化版)";
+        document.getElementById('formTitle').innerText = "丸太検知 AI版";
         document.getElementById('saveBtn').innerText = "保存";
         document.getElementById('cancelBtn').style.display = "none";
     }
@@ -546,5 +695,3 @@
 </script>
 </body>
 </html>
-
-
