@@ -1,0 +1,17 @@
+{
+  "name": "丸太検知ツール",
+  "short_name": "丸太検知",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#fdf5e6",
+  "theme_color": "#8b4513",
+  "scope": "./",
+  "icons": [
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
