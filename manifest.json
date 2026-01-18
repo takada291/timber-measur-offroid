@@ -1,6 +1,6 @@
 {
   "name": "丸太検知ツール",
-  "short_name": "丸太検知",
+  "short_name": "丸太検知-offroid",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#fdf5e6",
@@ -15,3 +15,4 @@
     }
   ]
 }
+
