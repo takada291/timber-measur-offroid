@@ -15,8 +15,6 @@
     <meta name="apple-mobile-web-app-title" content="丸太検知-offroid-v0.1">
     <link rel="apple-touch-icon" href="icon-512.png">
 
-    <script src="https://cdn.jsdelivr.net/npm/vosk-browser@0.0.9/dist/vosk.js" onload="onVoskLoaded()" onerror="onVoskError()"></script>
-
     <style>
         body { font-family: -apple-system, sans-serif; padding: 15px; background: #fdf5e6; color: #333; margin: 0; }
         .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px; position: relative; }
@@ -89,8 +87,7 @@
     </div>
 
     <div id="voiceStatus" class="status-loading">
-        1. ページ読込待機中...<br>
-        (ここが変わらない場合は更新してください)
+        1. 起動準備中...
     </div>
     <input type="hidden" id="editId" value="">
     
@@ -210,7 +207,6 @@
     let processor = null;
     let isListening = false;
     let model = null;
-    let voskLoaded = false;
 
     // 要素取得
     const statusEl = document.getElementById('voiceStatus');
@@ -218,24 +214,14 @@
 
     // --- ステータス表示 ---
     function setStatus(msg, type='normal') {
-        statusEl.innerHTML = msg; // 改行反映のためinnerHTML
+        console.log("Status:", msg);
+        statusEl.innerHTML = msg;
         statusEl.className = ''; 
         if(type === 'loading') statusEl.classList.add('status-loading');
         else if(type === 'ready') statusEl.classList.add('status-ready');
         else if(type === 'listening') statusEl.classList.add('status-listening');
         else if(type === 'error') statusEl.classList.add('status-error');
         else statusEl.classList.add('status-loading');
-    }
-
-    // --- ライブラリ読み込みコールバック ---
-    function onVoskLoaded() {
-        voskLoaded = true;
-        setStatus("2. ライブラリ読込完了。\n3. 初期化を開始します...", "loading");
-        initVosk(); // 初期化スタート
-    }
-
-    function onVoskError() {
-        setStatus("⚠️ エラー: Voskライブラリの読み込みに失敗しました。\nネットワーク接続を確認してください。", "error");
     }
 
     // --- メイン初期化処理 ---
@@ -251,15 +237,24 @@
             setTimeout(loadVoices, 1000);
         }
 
-        // Voskがまだロードされていない場合の保険
-        if (!voskLoaded) {
-            if (window.Vosk) {
-                onVoskLoaded();
-            } else {
-                setStatus("1. Voskライブラリをダウンロード中...\n(WiFi推奨)", "loading");
-            }
-        }
+        // ★ここで動的にVoskライブラリを読み込む（順序保証のため）
+        loadVoskLibrary();
     };
+
+    function loadVoskLibrary() {
+        setStatus("1. ライブラリをダウンロード中...", "loading");
+        
+        const script = document.createElement('script');
+        script.src = "https://cdn.jsdelivr.net/npm/vosk-browser@0.0.9/dist/vosk.js";
+        script.onload = () => {
+            setStatus("2. ライブラリ読込完了。\n3. 初期化を開始します...", "loading");
+            initVosk(); // ライブラリ読込後に実行
+        };
+        script.onerror = () => {
+            setStatus("⚠️ エラー: ライブラリの読み込みに失敗しました。\nネット接続を確認してください。", "error");
+        };
+        document.body.appendChild(script);
+    }
 
     // --- Vosk初期化 ---
     async function initVosk() {
@@ -274,7 +269,6 @@
             setStatus("3. モデル(50MB)をダウンロード中...\n※初回は1分ほどかかります", "loading");
 
             // 2. モデル作成
-            // ★重要：window.Vosk を使う
             model = await window.Vosk.createModel(MODEL_URL);
             
             setStatus("4. 認識エンジンを構成中...", "loading");
@@ -345,6 +339,7 @@
         } catch (e) {
             console.error(e);
             setStatus("マイクエラー: " + e.message, "error");
+            alert("マイクの使用を許可してください");
         }
     }
 
@@ -655,12 +650,6 @@
         a.download = `丸太検知-${yyyy}${mm}${dd}-${hh}${min}.csv`;
         a.click();
         setTimeout(() => window.URL.revokeObjectURL(url), 100);
-    }
-</script>
-
-<script>
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('sw.js').catch(err => console.log('SW Register Error:', err));
     }
 </script>
 </body>
