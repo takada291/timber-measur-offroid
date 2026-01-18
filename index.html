@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>丸太検知-offroid</title>
+    <title>丸太検知-offroid-v0.1</title>
     
     <script src="coi-serviceworker.js"></script>
 
@@ -12,8 +12,10 @@
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black">
-    <meta name="apple-mobile-web-app-title" content="丸太検知-offroid">
+    <meta name="apple-mobile-web-app-title" content="丸太検知-offroid-v0.1">
     <link rel="apple-touch-icon" href="icon-512.png">
+
+    <script src="https://cdn.jsdelivr.net/npm/vosk-browser@0.0.9/dist/vosk.js"></script>
 
     <style>
         body { font-family: -apple-system, sans-serif; padding: 15px; background: #fdf5e6; color: #333; margin: 0; }
@@ -23,15 +25,15 @@
         h2 { margin: 0; font-size: 1.1em; color: #5d4037; border: none; }
         .settings-btn { background: #6c757d; color: white; padding: 5px 10px; font-size: 0.85em; border-radius: 4px; border: none; cursor: pointer; }
 
-        /* ステータス表示のスタイル強化 */
+        /* ステータス表示 */
         #voiceStatus { 
             font-size: 0.9em; color: #fff; background: #9e9e9e; 
             padding: 8px 15px; border-radius: 20px; margin-bottom: 15px; 
             display: inline-block; transition: background 0.3s;
         }
-        .status-loading { background: #ff9800 !important; } /* 準備中（オレンジ） */
-        .status-ready { background: #2e7d32 !important; }   /* 準備OK（緑） */
-        .status-listening { background: #d32f2f !important; animation: pulse 1.5s infinite; } /* 聞き取り中（赤点滅） */
+        .status-loading { background: #ff9800 !important; }
+        .status-ready { background: #2e7d32 !important; }
+        .status-listening { background: #d32f2f !important; animation: pulse 1.5s infinite; }
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
 
         .input-row { display: flex; flex-direction: column; margin-bottom: 12px; }
@@ -65,7 +67,6 @@
         .del-btn { background: #d32f2f; color: white; padding: 6px; width: 45px; border-radius: 4px; font-size: 11px; }
         .voice-guide-footer { font-size: 0.82em; color: #5d4037; margin-top: 12px; font-weight: bold; text-align: center; background: #fff8e1; padding: 8px; border-radius: 8px; border: 1px dashed #ffa000; }
 
-        /* モーダル等はそのまま維持 */
         .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
         .modal-content { background-color: #fff; margin: 10% auto; padding: 20px; border-radius: 12px; width: 85%; max-width: 400px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
         .modal-header { font-weight: bold; font-size: 1.1em; margin-bottom: 15px; border-bottom: 1px solid #ddd; padding-bottom: 8px; color: #5d4037; }
@@ -189,7 +190,35 @@
     // 読み上げ用ボイスキャッシュ
     let availableVoices = [];
 
-    // window.onload は Vosk 初期化と競合しないよう注意
+    // ★重要：VoskモデルのURL（Zipファイルを指定）
+    const MODEL_URL = './model.zip'; 
+
+    // ★認識ワードリスト
+    const WORD_LIST = [
+        "すぎ", "ひのき", "ほかしんようじゅ", "ほかこうようじゅ",
+        "ちょっけい", "たかさ", "ながさ", "ざいしつ", "めも",
+        "えー", "びー", "しー", "まがり", "くされ", "くまはぎ",
+        "ほぞん", "とりけし",
+        "いち", "に", "さん", "よん", "ご", "ろく", "なな", "はち", "きゅう", "じゅう", 
+        "ひゃく", "てん", "まる", "ぜろ"
+    ];
+
+    let recognizer = null;
+    let audioContext = null;
+    let mediaStream = null;
+    let processor = null;
+    let isListening = false;
+    let model = null;
+
+    const statusEl = document.getElementById('voiceStatus');
+    const voiceBtn = document.getElementById('voiceBtn');
+
+    // 初期化
+    window.onload = function() {
+        initApp(); // アプリUI初期化
+        initVosk(); // Vosk初期化
+    };
+
     function initApp() {
         loadSettings();
         renderTable();
@@ -198,9 +227,186 @@
             window.speechSynthesis.onvoiceschanged = loadVoices;
             setTimeout(loadVoices, 1000);
         }
-    };
-    // initAppは後ほど呼び出します
+    }
 
+    // Vosk初期化処理
+    async function initVosk() {
+        try {
+            statusEl.innerText = "システム起動中(50MB)...";
+            statusEl.className = "status-loading";
+
+            // ★Zipモデルのロード
+            model = await Vosk.createModel(MODEL_URL);
+            
+            recognizer = new model.KaldiRecognizer(48000);
+            recognizer.setGrammar(JSON.stringify(WORD_LIST));
+            
+            statusEl.innerText = "音声入力：待機中";
+            statusEl.className = "status-ready";
+            voiceBtn.disabled = false;
+            voiceBtn.innerText = "音声入力 開始";
+            voiceBtn.onclick = toggleVoice;
+
+        } catch (e) {
+            console.error(e);
+            // エラーハンドリング：404ならまだ反映されていない
+            if(String(e).includes("404")) {
+                statusEl.innerText = "準備中(反映待ち)...";
+            } else {
+                statusEl.innerText = "起動エラー: " + e;
+            }
+            statusEl.style.background = "black";
+        }
+    }
+
+    // 音声認識の開始・停止
+    async function toggleVoice() {
+        if (!isListening) {
+            await startListening();
+        } else {
+            stopListening();
+        }
+    }
+
+    async function startListening() {
+        try {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            mediaStream = await navigator.mediaDevices.getUserMedia({
+                video: false,
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    channelCount: 1,
+                    sampleRate: 48000
+                }
+            });
+
+            const source = audioContext.createMediaStreamSource(mediaStream);
+            
+            await audioContext.audioWorklet.addModule('https://cdn.jsdelivr.net/npm/vosk-browser@0.0.9/dist/vosk-deploy.js');
+            processor = new AudioWorkletNode(audioContext, 'vosk-processor', {
+                processorOptions: { recognizer: recognizer }
+            });
+
+            processor.port.onmessage = (event) => {
+                const result = event.data;
+                if (result.result && result.result.text) {
+                    const text = result.result.text;
+                    console.log("認識結果:", text);
+                    statusEl.innerText = "認識: " + text;
+                    parseCommand(text);
+                }
+            };
+
+            source.connect(processor);
+            processor.connect(audioContext.destination);
+
+            isListening = true;
+            statusEl.innerText = "聞いています...";
+            statusEl.className = "status-listening";
+            voiceBtn.innerText = "音声入力 停止";
+            speakText("開始");
+
+        } catch (e) {
+            console.error(e);
+            statusEl.innerText = "マイクエラー";
+            alert("マイクの使用を許可してください");
+        }
+    }
+
+    function stopListening() {
+        if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
+        if (audioContext) audioContext.close();
+        isListening = false;
+        statusEl.innerText = "音声入力：待機中";
+        statusEl.className = "status-ready";
+        voiceBtn.innerText = "音声入力 開始";
+    }
+
+    // コマンド解析
+    function parseCommand(text) {
+        text = text.replace(/\s+/g, ''); 
+
+        // 保存・取消
+        if (text.includes("ほぞん")) { 
+            document.getElementById('saveBtn').click(); 
+            speakText("保存");
+            return; 
+        }
+        if (text.includes("とりけし")) { 
+            document.getElementById('diameter').value = ""; 
+            return; 
+        }
+
+        // 樹種
+        const treeSelect = document.getElementById('treeType');
+        if (text.includes("すぎ")) { treeSelect.value = "スギ"; highlight('treeType'); speakText("スギ"); }
+        else if (text.includes("ひのき")) { treeSelect.value = "ヒノキ"; highlight('treeType'); speakText("ヒノキ"); }
+        else if (text.includes("ほかしんようじゅ")) { treeSelect.value = "他針"; highlight('treeType'); speakText("他針"); }
+        else if (text.includes("ほかこうようじゅ")) { treeSelect.value = "他広"; highlight('treeType'); speakText("他広"); }
+
+        // 備考・材質
+        const memoInput = document.getElementById('memo');
+        let appendMemo = "";
+        
+        if (text.includes("ざいしつ")) {
+            if (text.includes("えー")) appendMemo = "材質A";
+            if (text.includes("びー")) appendMemo = "材質B";
+            if (text.includes("しー")) appendMemo = "材質C";
+        }
+        if (text.includes("めも")) {
+            if (text.includes("まがり")) appendMemo = "曲がり";
+            if (text.includes("くされ")) appendMemo = "腐れ";
+            if (text.includes("くまはぎ")) appendMemo = "クマ剥ぎ";
+        }
+        
+        if (appendMemo) {
+            memoInput.value = memoInput.value ? memoInput.value + " " + appendMemo : appendMemo;
+            highlight('memo');
+            speakText(appendMemo);
+        }
+
+        // 数字
+        const numVal = extractNumber(text);
+        if (numVal !== null) {
+            if (text.includes("ちょっけい")) {
+                document.getElementById('diameter').value = numVal;
+                updateVolume(); 
+                highlight('diameter');
+                speakText(numVal + "センチ");
+            } else if (text.includes("ながさ") || text.includes("たかさ")) {
+                document.getElementById('length').value = numVal;
+                updateVolume();
+                highlight('length');
+                speakText(numVal + "メートル");
+            }
+        }
+    }
+
+    function extractNumber(text) {
+        let numStr = text.replace(/ちょっけい|ながさ|たかさ|ざいしつ|めも|です|ます/g, "");
+        const map = {
+            "ぜろ":0, "まる":0, "いち":1, "に":2, "さん":3, "よん":4, "ご":5,
+            "ろく":6, "なな":7, "はち":8, "きゅう":9, "てん": "."
+        };
+        let arabStr = numStr;
+        for (const [key, val] of Object.entries(map)) {
+            arabStr = arabStr.split(key).join(val);
+        }
+        arabStr = arabStr.replace(/(\d)?じゅう(\d)?/g, (match, p1, p2) => ((p1?parseInt(p1):1)*10 + (p2?parseInt(p2):0)).toString());
+        arabStr = arabStr.replace(/(\d)?ひゃく(\d+)?/g, (match, p1, p2) => ((p1?parseInt(p1):1)*100 + (p2?parseInt(p2):0)).toString());
+        
+        const finalNum = parseFloat(arabStr.replace(/[^\d.]/g, ''));
+        return isNaN(finalNum) ? null : finalNum;
+    }
+
+    function highlight(id) {
+        const el = document.getElementById(id);
+        el.style.backgroundColor = "#fff9c4";
+        setTimeout(() => el.style.backgroundColor = "white", 500);
+    }
+
+    // 既存UI制御関数
     function openSettings() {
         const inputs = [1,2,3,4,5].map(i => document.getElementById('customTree'+i));
         inputs.forEach((input, idx) => {
@@ -383,7 +589,8 @@
         document.getElementById('volume').value = "";
         document.getElementById('memo').value = "";
         if (!keepLength) document.getElementById('length').value = "4";
-        document.getElementById('formTitle').innerText = "丸太検知-offroid";
+        // タイトルリセット時もv0.1に戻す
+        document.getElementById('formTitle').innerText = "丸太検知-offroid-v0.1";
         document.getElementById('saveBtn').innerText = "保存";
         document.getElementById('cancelBtn').style.display = "none";
     }
@@ -411,7 +618,6 @@
         setTimeout(() => window.URL.revokeObjectURL(url), 100);
     }
 
-    // 読み上げ機能（Voskからのコールバックで使用）
     function speakText(text) {
         if ('speechSynthesis' in window) {
             window.speechSynthesis.cancel();
@@ -427,217 +633,6 @@
     }
 </script>
 
-<script type="module">
-    // CDNからモジュールとしてインポート（ReferenceError回避）
-    import * as Vosk from 'https://cdn.jsdelivr.net/npm/vosk-browser@0.0.9/dist/vosk.js';
-
-    const MODEL_URL = './model.zip'; 
-    const WORD_LIST = [
-        "すぎ", "ひのき", "ほかしんようじゅ", "ほかこうようじゅ",
-        "ちょっけい", "たかさ", "ながさ", "ざいしつ", "めも",
-        "えー", "びー", "しー", "まがり", "くされ", "くまはぎ",
-        "ほぞん", "とりけし",
-        "いち", "に", "さん", "よん", "ご", "ろく", "なな", "はち", "きゅう", "じゅう", 
-        "ひゃく", "てん", "まる", "ぜろ"
-    ];
-
-    let recognizer = null;
-    let audioContext = null;
-    let mediaStream = null;
-    let processor = null;
-    let isListening = false;
-    let model = null;
-
-    const statusEl = document.getElementById('voiceStatus');
-    const voiceBtn = document.getElementById('voiceBtn');
-
-    // 初期化処理
-    async function initVosk() {
-        try {
-            statusEl.innerText = "モデル読込中(50MB)...";
-            statusEl.className = "status-loading";
-
-            // モデルのロード
-            model = await Vosk.createModel(MODEL_URL);
-            
-            recognizer = new model.KaldiRecognizer(48000);
-            recognizer.setGrammar(JSON.stringify(WORD_LIST));
-            
-            statusEl.innerText = "音声入力：待機中";
-            statusEl.className = "status-ready";
-            voiceBtn.disabled = false;
-            voiceBtn.innerText = "音声入力 開始";
-            
-            // ボタンにクリックイベントを設定
-            voiceBtn.onclick = toggleVoice;
-
-        } catch (e) {
-            console.error(e);
-            statusEl.innerText = "起動エラー: " + e;
-            statusEl.style.background = "black";
-        }
-    }
-
-    // 音声認識の開始・停止
-    async function toggleVoice() {
-        if (!isListening) {
-            await startListening();
-        } else {
-            stopListening();
-        }
-    }
-
-    async function startListening() {
-        try {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            mediaStream = await navigator.mediaDevices.getUserMedia({
-                video: false,
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    channelCount: 1,
-                    sampleRate: 48000
-                }
-            });
-
-            const source = audioContext.createMediaStreamSource(mediaStream);
-            
-            // AudioWorkletのロード
-            await audioContext.audioWorklet.addModule('https://cdn.jsdelivr.net/npm/vosk-browser@0.0.9/dist/vosk-deploy.js');
-            processor = new AudioWorkletNode(audioContext, 'vosk-processor', {
-                processorOptions: { recognizer: recognizer }
-            });
-
-            processor.port.onmessage = (event) => {
-                const result = event.data;
-                if (result.result && result.result.text) {
-                    const text = result.result.text;
-                    console.log("認識結果:", text);
-                    statusEl.innerText = "認識: " + text;
-                    parseCommand(text);
-                }
-            };
-
-            source.connect(processor);
-            processor.connect(audioContext.destination);
-
-            isListening = true;
-            statusEl.innerText = "聞いています...";
-            statusEl.className = "status-listening";
-            voiceBtn.innerText = "音声入力 停止";
-            speakText("開始");
-
-        } catch (e) {
-            console.error(e);
-            statusEl.innerText = "マイクエラー";
-            alert("マイクの使用を許可してください");
-        }
-    }
-
-    function stopListening() {
-        if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
-        if (audioContext) audioContext.close();
-        isListening = false;
-        statusEl.innerText = "音声入力：待機中";
-        statusEl.className = "status-ready";
-        voiceBtn.innerText = "音声入力 開始";
-    }
-
-    // --- コマンド解析ロジック ---
-    function parseCommand(text) {
-        text = text.replace(/\s+/g, ''); // 空白除去
-
-        // 1. 保存・取消
-        if (text.includes("ほぞん")) { 
-            document.getElementById('saveBtn').click(); // 既存の保存関数を呼ぶ
-            speakText("保存");
-            return; 
-        }
-        if (text.includes("とりけし")) { 
-            document.getElementById('diameter').value = ""; 
-            return; 
-        }
-
-        // 2. 樹種
-        const treeSelect = document.getElementById('treeType');
-        if (text.includes("すぎ")) { treeSelect.value = "スギ"; highlight('treeType'); speakText("スギ"); }
-        else if (text.includes("ひのき")) { treeSelect.value = "ヒノキ"; highlight('treeType'); speakText("ヒノキ"); }
-        else if (text.includes("ほかしんようじゅ")) { treeSelect.value = "他針"; highlight('treeType'); speakText("他針"); }
-        else if (text.includes("ほかこうようじゅ")) { treeSelect.value = "他広"; highlight('treeType'); speakText("他広"); }
-
-        // 3. 備考・材質
-        const memoInput = document.getElementById('memo');
-        let appendMemo = "";
-        
-        // 材質（備考欄に追記）
-        if (text.includes("ざいしつ")) {
-            if (text.includes("えー")) appendMemo = "材質A";
-            if (text.includes("びー")) appendMemo = "材質B";
-            if (text.includes("しー")) appendMemo = "材質C";
-        }
-        
-        // メモ
-        if (text.includes("めも")) {
-            if (text.includes("まがり")) appendMemo = "曲がり";
-            if (text.includes("くされ")) appendMemo = "腐れ";
-            if (text.includes("くまはぎ")) appendMemo = "クマ剥ぎ";
-        }
-        
-        if (appendMemo) {
-            // 既に文字があればスペースを空けて追記
-            memoInput.value = memoInput.value ? memoInput.value + " " + appendMemo : appendMemo;
-            highlight('memo');
-            speakText(appendMemo);
-        }
-
-        // 4. 数字系
-        const numVal = extractNumber(text);
-        if (numVal !== null) {
-            if (text.includes("ちょっけい")) {
-                document.getElementById('diameter').value = numVal;
-                updateVolume(); // 既存の計算関数
-                highlight('diameter');
-                speakText(numVal + "センチ");
-            } else if (text.includes("ながさ") || text.includes("たかさ")) {
-                document.getElementById('length').value = numVal;
-                updateVolume();
-                highlight('length');
-                speakText(numVal + "メートル");
-            }
-        }
-    }
-
-    // 漢数字変換ロジック
-    function extractNumber(text) {
-        let numStr = text.replace(/ちょっけい|ながさ|たかさ|ざいしつ|めも|です|ます/g, "");
-        const map = {
-            "ぜろ":0, "まる":0, "いち":1, "に":2, "さん":3, "よん":4, "ご":5,
-            "ろく":6, "なな":7, "はち":8, "きゅう":9, "てん": "."
-        };
-        let arabStr = numStr;
-        for (const [key, val] of Object.entries(map)) {
-            arabStr = arabStr.split(key).join(val);
-        }
-        arabStr = arabStr.replace(/(\d)?じゅう(\d)?/g, (match, p1, p2) => ((p1?parseInt(p1):1)*10 + (p2?parseInt(p2):0)).toString());
-        arabStr = arabStr.replace(/(\d)?ひゃく(\d+)?/g, (match, p1, p2) => ((p1?parseInt(p1):1)*100 + (p2?parseInt(p2):0)).toString());
-        
-        const finalNum = parseFloat(arabStr.replace(/[^\d.]/g, ''));
-        return isNaN(finalNum) ? null : finalNum;
-    }
-
-    function highlight(id) {
-        const el = document.getElementById(id);
-        el.style.backgroundColor = "#fff9c4";
-        setTimeout(() => el.style.backgroundColor = "white", 500);
-    }
-
-    // アプリ初期化とVosk初期化を実行
-    window.onload = function() {
-        initApp(); // 既存の初期化
-        initVosk(); // Voskの初期化
-    };
-</script>
-
 <script>
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('sw.js').catch(err => console.log('SW Register Error:', err));
@@ -645,5 +640,3 @@
 </script>
 </body>
 </html>
-
-
