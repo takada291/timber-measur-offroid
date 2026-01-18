@@ -23,7 +23,7 @@
         h2 { margin: 0; font-size: 1.1em; color: #5d4037; border: none; }
         .settings-btn { background: #6c757d; color: white; padding: 5px 10px; font-size: 0.85em; border-radius: 4px; border: none; cursor: pointer; }
 
-        /* ステータス表示エリア */
+        /* ステータス表示 */
         #voiceStatus { 
             font-size: 0.9em; color: #fff; background: #666; 
             padding: 10px 15px; border-radius: 8px; margin-bottom: 15px; 
@@ -39,8 +39,7 @@
         .input-row { display: flex; flex-direction: column; margin-bottom: 12px; }
         .label-group { display: flex; align-items: baseline; margin-bottom: 4px; }
         .label-group label { width: 130px; font-size: 0.9em; font-weight: bold; color: #5d4037; }
-        .label-group .guide { font-size: 0.75em; color: #795548; font-weight: normal; }
-
+        
         .input-row input, .input-row select {
             width: 100%; padding: 10px; border: 1px solid #d7ccc8; border-radius: 6px;
             font-size: 16px; box-sizing: border-box; background-color: white; height: 44px;
@@ -76,6 +75,7 @@
         .radio-group { display: flex; flex-direction: column; gap: 8px; font-size: 0.9em; }
         .modal-btns { display: flex; gap: 10px; margin-top: 20px; }
         .close-btn { background: #6c757d; }
+        .guide { font-size: 0.75em; color: #795548; font-weight: normal; }
     </style>
 </head>
 <body>
@@ -87,7 +87,7 @@
     </div>
 
     <div id="voiceStatus" class="status-loading">
-        1. 起動準備中...
+        1. 環境確認中...
     </div>
     <input type="hidden" id="editId" value="">
     
@@ -191,7 +191,267 @@
     let currentSettings = { customTrees: [], roundMode: 'normal' };
     let availableVoices = [];
 
-    // Vosk用変数
+    // --- メイン初期化 ---
+    window.onload = function() {
+        initApp();
+        // ★少し待ってからVoskを読み込む（COIリロード対策）
+        setTimeout(safeLoadVosk, 1500); 
+    };
+
+    function initApp() {
+        loadSettings();
+        renderTable();
+        if ('speechSynthesis' in window) {
+            const loadVoices = () => { availableVoices = window.speechSynthesis.getVoices(); };
+            window.speechSynthesis.onvoiceschanged = loadVoices;
+            setTimeout(loadVoices, 1000);
+        }
+    }
+
+    // --- アプリ基本機能 ---
+    // (openSettings, saveSettingsなどは以前と同じため省略なしで記述します)
+    
+    function openSettings() {
+        const inputs = [1,2,3,4,5].map(i => document.getElementById('customTree'+i));
+        inputs.forEach((input, idx) => { input.value = currentSettings.customTrees[idx] || ""; });
+        const radios = document.getElementsByName('roundMode');
+        radios.forEach(radio => { radio.checked = (radio.value === currentSettings.roundMode); });
+        document.getElementById('settingsModal').style.display = "block";
+    }
+    window.openSettings = openSettings;
+
+    function closeSettings() { document.getElementById('settingsModal').style.display = "none"; }
+    window.closeSettings = closeSettings;
+
+    function saveSettings() {
+        const newCustomTrees = [];
+        [1,2,3,4,5].forEach(i => {
+            const val = document.getElementById('customTree'+i).value.trim();
+            if(val) newCustomTrees.push(val);
+        });
+        let newRoundMode = 'normal';
+        document.getElementsByName('roundMode').forEach(radio => { if(radio.checked) newRoundMode = radio.value; });
+        currentSettings = { customTrees: newCustomTrees, roundMode: newRoundMode };
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(currentSettings));
+        applySettingsToUI();
+        updateVolume();
+        closeSettings();
+        alert("設定を保存しました");
+    }
+    window.saveSettings = saveSettings;
+
+    function loadSettings() {
+        const saved = localStorage.getItem(SETTINGS_KEY);
+        if(saved) currentSettings = JSON.parse(saved);
+        applySettingsToUI();
+    }
+
+    function applySettingsToUI() {
+        const select = document.getElementById('treeType');
+        const currentVal = select.value;
+        select.innerHTML = "";
+        DEFAULT_TREES.forEach(tree => {
+            const op = document.createElement('option');
+            op.value = tree;
+            op.text = tree;
+            select.appendChild(op);
+        });
+        currentSettings.customTrees.forEach(tree => {
+            const op = document.createElement('option');
+            op.value = tree;
+            op.text = tree;
+            select.appendChild(op);
+        });
+        if ([...DEFAULT_TREES, ...currentSettings.customTrees].includes(currentVal)) {
+            select.value = currentVal;
+        }
+        const guide = document.getElementById('calcMethodGuide');
+        guide.innerText = (currentSettings.roundMode === 'jas') ? "※JAS規格で計算" : "※小数4位四捨五入";
+    }
+
+    function updateVolume() {
+        const L = parseFloat(document.getElementById('length').value);
+        const D = parseFloat(document.getElementById('diameter').value);
+        const volEl = document.getElementById('volume');
+        if (!L || !D) { volEl.value = ""; return; }
+        let rawVol = 0;
+        if (L < 6) rawVol = (D * D * L) / 10000;
+        else {
+            const L_prime = Math.floor(L);
+            const factor = D + (L_prime - 4) / 2;
+            rawVol = (factor * factor * L) / 10000;
+        }
+        let finalVol = 0;
+        if (currentSettings.roundMode === 'jas') {
+            if (rawVol >= 0.001) finalVol = Math.round(rawVol * 1000) / 1000;
+            else finalVol = Math.round(rawVol * 10000) / 10000;
+        } else { finalVol = Math.round(rawVol * 1000) / 1000; }
+        volEl.value = finalVol;
+    }
+    window.updateVolume = updateVolume;
+
+    function handleSave() {
+        var treeType = document.getElementById('treeType').value;
+        var length = document.getElementById('length').value;
+        var diameter = document.getElementById('diameter').value;
+        var volume = document.getElementById('volume').value;
+        var memo = document.getElementById('memo').value;
+        var editId = document.getElementById('editId').value;
+        if(!length || !diameter) { alert("入力不足（材長・末口直径）"); return; }
+        var list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        var record = {
+            treeType: treeType, length: length, diameter: diameter, volume: volume, memo: memo,
+            id: editId ? editId : String(Date.now())
+        };
+        if (editId) {
+            var index = list.findIndex(item => String(item.id) === String(editId));
+            if (index !== -1) list[index] = record;
+        } else { list.unshift(record); }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+        resetForm(true); 
+        renderTable();
+    }
+    window.handleSave = handleSave;
+
+    function renderTable() {
+        var list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        var tbody = document.getElementById('tableBody');
+        var totalV = 0;
+        tbody.innerHTML = '';
+        list.forEach(item => {
+            var v = parseFloat(item.volume) || 0;
+            totalV += v;
+            var row = document.createElement('tr');
+            row.innerHTML = `<td>${item.treeType}</td><td>${item.length}</td><td>${item.diameter}</td><td>${v.toFixed(3)}</td><td>${item.memo || ''}</td><td class="action-btns"><button class="edit-btn" onclick="startEdit('${item.id}')">修正</button><button class="del-btn" onclick="handleDelete('${item.id}')">削除</button></td>`;
+            tbody.appendChild(row);
+        });
+        document.getElementById('totalCount').innerText = list.length;
+        document.getElementById('totalVolume').innerText = totalV.toFixed(3);
+    }
+
+    function startEdit(id) {
+        var list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        var target = list.find(item => String(item.id) === String(id));
+        if(target) {
+            document.getElementById('editId').value = target.id;
+            document.getElementById('treeType').value = target.treeType;
+            document.getElementById('length').value = target.length;
+            document.getElementById('diameter').value = target.diameter;
+            document.getElementById('memo').value = target.memo || '';
+            updateVolume();
+            document.getElementById('formTitle').innerText = "【修正中】";
+            document.getElementById('saveBtn').innerText = "更新";
+            document.getElementById('cancelBtn').style.display = "inline-block";
+            window.scrollTo(0,0);
+        }
+    }
+    window.startEdit = startEdit;
+
+    function handleDelete(id) {
+        if(!confirm("削除しますか？")) return;
+        var list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        var newList = list.filter(item => String(item.id) !== String(id));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(newList));
+        renderTable();
+    }
+    window.handleDelete = handleDelete;
+
+    function handleAllClear() {
+        if(!confirm("全データを消去しますか？")) return;
+        localStorage.removeItem(STORAGE_KEY);
+        renderTable();
+    }
+    window.handleAllClear = handleAllClear;
+
+    function resetForm(keepLength = false) {
+        document.getElementById('editId').value = "";
+        document.getElementById('diameter').value = "";
+        document.getElementById('volume').value = "";
+        document.getElementById('memo').value = "";
+        if (!keepLength) document.getElementById('length').value = "4";
+        document.getElementById('formTitle').innerText = "丸太検知-offroid-v0.1";
+        document.getElementById('saveBtn').innerText = "保存";
+        document.getElementById('cancelBtn').style.display = "none";
+    }
+    window.resetForm = resetForm;
+
+    function handleExport() {
+        var list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        if(list.length === 0) { alert("データがありません"); return; }
+        var csv = "\ufeff樹種,材長(m),末口直径(cm),素材材積(m3),備考\n";
+        list.forEach(item => {
+            csv += `${item.treeType},${item.length},${item.diameter},${item.volume},${(item.memo || "").replace(/,/g, " ")}\n`;
+        });
+        var blob = new Blob([csv], { type: 'text/csv' });
+        var url = window.URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        var now = new Date();
+        var yyyy = now.getFullYear();
+        var mm = String(now.getMonth() + 1).padStart(2, '0');
+        var dd = String(now.getDate()).padStart(2, '0');
+        var hh = String(now.getHours()).padStart(2, '0');
+        var min = String(now.getMinutes()).padStart(2, '0');
+        a.href = url;
+        a.download = `丸太検知-${yyyy}${mm}${dd}-${hh}${min}.csv`;
+        a.click();
+        setTimeout(() => window.URL.revokeObjectURL(url), 100);
+    }
+    window.handleExport = handleExport;
+
+    function speakText(text) {
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
+            const uttr = new SpeechSynthesisUtterance(text);
+            uttr.lang = "ja-JP";
+            uttr.rate = 1.2;
+            if(availableVoices.length === 0) availableVoices = window.speechSynthesis.getVoices();
+            let targetVoice = availableVoices.find(v => v.lang === 'ja-JP' && v.localService === true) || availableVoices.find(v => v.lang === 'ja-JP');
+            if (targetVoice) uttr.voice = targetVoice;
+            window.speechSynthesis.speak(uttr);
+        }
+    }
+</script>
+
+<script type="module">
+    // ステータス更新
+    const statusEl = document.getElementById('voiceStatus');
+    const voiceBtn = document.getElementById('voiceBtn');
+    
+    function setStatus(msg, type='normal') {
+        console.log("[Status]", msg);
+        statusEl.innerHTML = msg;
+        statusEl.className = ''; 
+        if(type === 'loading') statusEl.classList.add('status-loading');
+        else if(type === 'ready') statusEl.classList.add('status-ready');
+        else if(type === 'listening') statusEl.classList.add('status-listening');
+        else if(type === 'error') statusEl.classList.add('status-error');
+        else statusEl.classList.add('status-loading');
+    }
+
+    // グローバルに安全読み込み関数を登録
+    window.safeLoadVosk = async function() {
+        // 1. COIチェック (ページがリロードされるべきか判定)
+        if (!window.crossOriginIsolated) {
+            setStatus("2. セキュリティ構成を更新中...\n(自動でリロードされます)", "error");
+            // coi-serviceworkerがリロードするのを待つ
+            return;
+        }
+
+        // 2. モジュールを動的インポート
+        setStatus("2. Voskライブラリをダウンロード中...\n(WiFi推奨)", "loading");
+        try {
+            // CDNを変更 (unpkgを使用)
+            const Vosk = await import('https://unpkg.com/vosk-browser@0.0.9/dist/vosk.js?module');
+            
+            // 読み込み成功
+            initVosk(Vosk);
+        } catch (e) {
+            console.error(e);
+            setStatus("⚠️ エラー: ライブラリの読込に失敗。\n" + e, "error");
+        }
+    };
+
+    // Vosk変数
     const MODEL_URL = './model.zip'; 
     const WORD_LIST = [
         "すぎ", "ひのき", "ほかしんようじゅ", "ほかこうようじゅ",
@@ -207,71 +467,17 @@
     let processor = null;
     let isListening = false;
     let model = null;
+    let VoskLib = null; // インポートしたライブラリを保持
 
-    // 要素取得
-    const statusEl = document.getElementById('voiceStatus');
-    const voiceBtn = document.getElementById('voiceBtn');
-
-    // --- ステータス表示 ---
-    function setStatus(msg, type='normal') {
-        console.log("Status:", msg);
-        statusEl.innerHTML = msg;
-        statusEl.className = ''; 
-        if(type === 'loading') statusEl.classList.add('status-loading');
-        else if(type === 'ready') statusEl.classList.add('status-ready');
-        else if(type === 'listening') statusEl.classList.add('status-listening');
-        else if(type === 'error') statusEl.classList.add('status-error');
-        else statusEl.classList.add('status-loading');
-    }
-
-    // --- メイン初期化処理 ---
-    window.onload = function() {
-        // アプリUI初期化
-        loadSettings();
-        renderTable();
-        
-        // 音声合成の準備
-        if ('speechSynthesis' in window) {
-            const loadVoices = () => { availableVoices = window.speechSynthesis.getVoices(); };
-            window.speechSynthesis.onvoiceschanged = loadVoices;
-            setTimeout(loadVoices, 1000);
-        }
-
-        // ★ここで動的にVoskライブラリを読み込む（順序保証のため）
-        loadVoskLibrary();
-    };
-
-    function loadVoskLibrary() {
-        setStatus("1. ライブラリをダウンロード中...", "loading");
-        
-        const script = document.createElement('script');
-        script.src = "https://cdn.jsdelivr.net/npm/vosk-browser@0.0.9/dist/vosk.js";
-        script.onload = () => {
-            setStatus("2. ライブラリ読込完了。\n3. 初期化を開始します...", "loading");
-            initVosk(); // ライブラリ読込後に実行
-        };
-        script.onerror = () => {
-            setStatus("⚠️ エラー: ライブラリの読み込みに失敗しました。\nネット接続を確認してください。", "error");
-        };
-        document.body.appendChild(script);
-    }
-
-    // --- Vosk初期化 ---
-    async function initVosk() {
+    async function initVosk(Vosk) {
+        VoskLib = Vosk; // グローバル保持
         try {
-            // 1. COIチェック
-            if (!window.crossOriginIsolated) {
-                setStatus("⚠️ セキュリティ設定が無効です。\nページを再読み込みします (COI)", "error");
-                setTimeout(() => window.location.reload(), 2000);
-                return;
-            }
+            setStatus("3. モデル(50MB)を読込中...\n※初回は時間がかかります", "loading");
 
-            setStatus("3. モデル(50MB)をダウンロード中...\n※初回は1分ほどかかります", "loading");
-
-            // 2. モデル作成
-            model = await window.Vosk.createModel(MODEL_URL);
+            // モデル作成
+            model = await Vosk.createModel(MODEL_URL);
             
-            setStatus("4. 認識エンジンを構成中...", "loading");
+            setStatus("4. 音声認識エンジンを起動中...", "loading");
             recognizer = new model.KaldiRecognizer(48000);
             recognizer.setGrammar(JSON.stringify(WORD_LIST));
             
@@ -283,12 +489,11 @@
         } catch (e) {
             console.error(e);
             let msg = "起動エラー: " + e;
-            if (String(e).includes("404")) msg = "⚠️ エラー: model.zip が見つかりません。\nGitHubに正しくアップロードされていますか？";
+            if (String(e).includes("404")) msg = "⚠️ エラー: model.zip が見つかりません。\nGitHubの配置を確認してください。";
             setStatus(msg, "error");
         }
     }
 
-    // --- 音声認識の制御 ---
     async function toggleVoice() {
         if (!isListening) {
             await startListening();
@@ -314,7 +519,9 @@
 
             const source = audioContext.createMediaStreamSource(mediaStream);
             
-            await audioContext.audioWorklet.addModule('https://cdn.jsdelivr.net/npm/vosk-browser@0.0.9/dist/vosk-deploy.js');
+            // AudioWorkletのロード (CDNから)
+            await audioContext.audioWorklet.addModule('https://unpkg.com/vosk-browser@0.0.9/dist/vosk-deploy.js');
+            
             processor = new AudioWorkletNode(audioContext, 'vosk-processor', {
                 processorOptions: { recognizer: recognizer }
             });
@@ -351,22 +558,19 @@
         voiceBtn.innerText = "音声入力 開始";
     }
 
-    // --- コマンド解析 ---
+    // コマンド解析 (window直下にあるUI関数を呼び出す)
     function parseCommand(text) {
         text = text.replace(/\s+/g, ''); 
 
-        // 保存・取消
-        if (text.includes("ほぞん")) { handleSave(); speakText("保存"); return; }
+        if (text.includes("ほぞん")) { window.handleSave(); speakText("保存"); return; }
         if (text.includes("とりけし")) { document.getElementById('diameter').value = ""; return; }
 
-        // 樹種
         const treeSelect = document.getElementById('treeType');
         if (text.includes("すぎ")) { treeSelect.value = "スギ"; highlight('treeType'); speakText("スギ"); }
         else if (text.includes("ひのき")) { treeSelect.value = "ヒノキ"; highlight('treeType'); speakText("ヒノキ"); }
         else if (text.includes("ほかしんようじゅ")) { treeSelect.value = "他針"; highlight('treeType'); speakText("他針"); }
         else if (text.includes("ほかこうようじゅ")) { treeSelect.value = "他広"; highlight('treeType'); speakText("他広"); }
 
-        // 備考・材質
         const memoInput = document.getElementById('memo');
         let appendMemo = "";
         
@@ -387,17 +591,16 @@
             speakText(appendMemo);
         }
 
-        // 数字
         const numVal = extractNumber(text);
         if (numVal !== null) {
             if (text.includes("ちょっけい")) {
                 document.getElementById('diameter').value = numVal;
-                updateVolume(); 
+                window.updateVolume(); 
                 highlight('diameter');
                 speakText(numVal + "センチ");
             } else if (text.includes("ながさ") || text.includes("たかさ")) {
                 document.getElementById('length').value = numVal;
-                updateVolume();
+                window.updateVolume();
                 highlight('length');
                 speakText(numVal + "メートル");
             }
@@ -426,230 +629,11 @@
         el.style.backgroundColor = "#fff9c4";
         setTimeout(() => el.style.backgroundColor = "white", 500);
     }
+</script>
 
-    function speakText(text) {
-        if ('speechSynthesis' in window) {
-            window.speechSynthesis.cancel();
-            const uttr = new SpeechSynthesisUtterance(text);
-            uttr.lang = "ja-JP";
-            uttr.rate = 1.2;
-            
-            if(availableVoices.length === 0) availableVoices = window.speechSynthesis.getVoices();
-            let targetVoice = availableVoices.find(v => v.lang === 'ja-JP' && v.localService === true) || availableVoices.find(v => v.lang === 'ja-JP');
-            if (targetVoice) uttr.voice = targetVoice;
-            window.speechSynthesis.speak(uttr);
-        }
-    }
-
-    // --- アプリ基本機能 ---
-    function openSettings() {
-        const inputs = [1,2,3,4,5].map(i => document.getElementById('customTree'+i));
-        inputs.forEach((input, idx) => {
-            input.value = currentSettings.customTrees[idx] || "";
-        });
-        const radios = document.getElementsByName('roundMode');
-        radios.forEach(radio => {
-            radio.checked = (radio.value === currentSettings.roundMode);
-        });
-        document.getElementById('settingsModal').style.display = "block";
-    }
-
-    function closeSettings() { document.getElementById('settingsModal').style.display = "none"; }
-
-    function saveSettings() {
-        const newCustomTrees = [];
-        [1,2,3,4,5].forEach(i => {
-            const val = document.getElementById('customTree'+i).value.trim();
-            if(val) newCustomTrees.push(val);
-        });
-        let newRoundMode = 'normal';
-        document.getElementsByName('roundMode').forEach(radio => {
-            if(radio.checked) newRoundMode = radio.value;
-        });
-        currentSettings = { customTrees: newCustomTrees, roundMode: newRoundMode };
-        localStorage.setItem(SETTINGS_KEY, JSON.stringify(currentSettings));
-        applySettingsToUI();
-        updateVolume();
-        closeSettings();
-        alert("設定を保存しました");
-    }
-
-    function loadSettings() {
-        const saved = localStorage.getItem(SETTINGS_KEY);
-        if(saved) currentSettings = JSON.parse(saved);
-        applySettingsToUI();
-    }
-
-    function applySettingsToUI() {
-        const select = document.getElementById('treeType');
-        const currentVal = select.value;
-        select.innerHTML = "";
-        DEFAULT_TREES.forEach(tree => {
-            const op = document.createElement('option');
-            op.value = tree;
-            op.text = tree;
-            select.appendChild(op);
-        });
-        currentSettings.customTrees.forEach(tree => {
-            const op = document.createElement('option');
-            op.value = tree;
-            op.text = tree;
-            select.appendChild(op);
-        });
-        if ([...DEFAULT_TREES, ...currentSettings.customTrees].includes(currentVal)) {
-            select.value = currentVal;
-        }
-        const guide = document.getElementById('calcMethodGuide');
-        guide.innerText = (currentSettings.roundMode === 'jas') ? "※JAS規格で計算" : "※小数4位四捨五入";
-    }
-
-    function updateVolume() {
-        const L = parseFloat(document.getElementById('length').value);
-        const D = parseFloat(document.getElementById('diameter').value);
-        const volEl = document.getElementById('volume');
-        if (!L || !D) { volEl.value = ""; return; }
-
-        let rawVol = 0;
-        if (L < 6) {
-            rawVol = (D * D * L) / 10000;
-        } else {
-            const L_prime = Math.floor(L);
-            const factor = D + (L_prime - 4) / 2;
-            rawVol = (factor * factor * L) / 10000;
-        }
-
-        let finalVol = 0;
-        if (currentSettings.roundMode === 'jas') {
-            if (rawVol >= 0.001) finalVol = Math.round(rawVol * 1000) / 1000;
-            else finalVol = Math.round(rawVol * 10000) / 10000;
-        } else {
-            finalVol = Math.round(rawVol * 1000) / 1000;
-        }
-        volEl.value = finalVol;
-    }
-
-    function handleSave() {
-        var treeType = document.getElementById('treeType').value;
-        var length = document.getElementById('length').value;
-        var diameter = document.getElementById('diameter').value;
-        var volume = document.getElementById('volume').value;
-        var memo = document.getElementById('memo').value;
-        var editId = document.getElementById('editId').value;
-
-        if(!length || !diameter) {
-            alert("入力不足（材長・末口直径）");
-            return;
-        }
-
-        var list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-        var record = {
-            treeType: treeType,
-            length: length,
-            diameter: diameter,
-            volume: volume,
-            memo: memo,
-            id: editId ? editId : String(Date.now())
-        };
-
-        if (editId) {
-            var index = list.findIndex(item => String(item.id) === String(editId));
-            if (index !== -1) list[index] = record;
-        } else {
-            list.unshift(record);
-        }
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
-        resetForm(true); 
-        renderTable();
-    }
-
-    function renderTable() {
-        var list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-        var tbody = document.getElementById('tableBody');
-        var totalV = 0;
-        tbody.innerHTML = '';
-        list.forEach(item => {
-            var v = parseFloat(item.volume) || 0;
-            totalV += v;
-            var row = document.createElement('tr');
-            row.innerHTML = `
-                <td>${item.treeType}</td>
-                <td>${item.length}</td>
-                <td>${item.diameter}</td>
-                <td>${v.toFixed(3)}</td>
-                <td>${item.memo || ''}</td>
-                <td class="action-btns">
-                    <button class="edit-btn" onclick="startEdit('${item.id}')">修正</button>
-                    <button class="del-btn" onclick="handleDelete('${item.id}')">削除</button>
-                </td>`;
-            tbody.appendChild(row);
-        });
-        document.getElementById('totalCount').innerText = list.length;
-        document.getElementById('totalVolume').innerText = totalV.toFixed(3);
-    }
-
-    function startEdit(id) {
-        var list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-        var target = list.find(item => String(item.id) === String(id));
-        if(target) {
-            document.getElementById('editId').value = target.id;
-            document.getElementById('treeType').value = target.treeType;
-            document.getElementById('length').value = target.length;
-            document.getElementById('diameter').value = target.diameter;
-            document.getElementById('memo').value = target.memo || '';
-            updateVolume();
-            document.getElementById('formTitle').innerText = "【修正中】";
-            document.getElementById('saveBtn').innerText = "更新";
-            document.getElementById('cancelBtn').style.display = "inline-block";
-            window.scrollTo(0,0);
-        }
-    }
-
-    function handleDelete(id) {
-        if(!confirm("削除しますか？")) return;
-        var list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-        var newList = list.filter(item => String(item.id) !== String(id));
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(newList));
-        renderTable();
-    }
-
-    function handleAllClear() {
-        if(!confirm("全データを消去しますか？")) return;
-        localStorage.removeItem(STORAGE_KEY);
-        renderTable();
-    }
-
-    function resetForm(keepLength = false) {
-        document.getElementById('editId').value = "";
-        document.getElementById('diameter').value = "";
-        document.getElementById('volume').value = "";
-        document.getElementById('memo').value = "";
-        if (!keepLength) document.getElementById('length').value = "4";
-        document.getElementById('formTitle').innerText = "丸太検知-offroid-v0.1";
-        document.getElementById('saveBtn').innerText = "保存";
-        document.getElementById('cancelBtn').style.display = "none";
-    }
-
-    function handleExport() {
-        var list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-        if(list.length === 0) { alert("データがありません"); return; }
-        var csv = "\ufeff樹種,材長(m),末口直径(cm),素材材積(m3),備考\n";
-        list.forEach(item => {
-            csv += `${item.treeType},${item.length},${item.diameter},${item.volume},${(item.memo || "").replace(/,/g, " ")}\n`;
-        });
-        var blob = new Blob([csv], { type: 'text/csv' });
-        var url = window.URL.createObjectURL(blob);
-        var a = document.createElement("a");
-        var now = new Date();
-        var yyyy = now.getFullYear();
-        var mm = String(now.getMonth() + 1).padStart(2, '0');
-        var dd = String(now.getDate()).padStart(2, '0');
-        var hh = String(now.getHours()).padStart(2, '0');
-        var min = String(now.getMinutes()).padStart(2, '0');
-        
-        a.href = url;
-        a.download = `丸太検知-${yyyy}${mm}${dd}-${hh}${min}.csv`;
-        a.click();
-        setTimeout(() => window.URL.revokeObjectURL(url), 100);
+<script>
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('sw.js').catch(err => console.log('SW Register Error:', err));
     }
 </script>
 </body>
