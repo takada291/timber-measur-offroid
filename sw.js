@@ -1,4 +1,4 @@
-const CACHE_NAME = 'timber-measur-offroid-v0.1.7';2026.01.18 21:00
+const CACHE_NAME = 'timber-measur-offroid-v0.1.8';2026.01.18 21:05
 const urlsToCache = [
   './',
   'index.html',
@@ -38,6 +38,7 @@ self.addEventListener('fetch', (event) => {
     })
   );
 });
+
 
 
 
